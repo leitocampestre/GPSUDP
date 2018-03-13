@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "sdkconfig.h"
 
-#include "esp_sleep.h"
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_event.h"
@@ -29,6 +31,9 @@
 
 #define CONNECTED_BIT (1<<0)
 
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP 10 /* Time ESP32 will go to sleep (in seconds) */
+
 static const char *TAG = "wifi";
 static const char *UDPTAG = "udp";
 
@@ -37,11 +42,13 @@ static EventGroupHandle_t wifi_event_group;
 struct Payload{
 	int latitude;
 	int longitude;
-} Paquete1, Paquete2;
-
-struct Payload *pLeer, *pMandar;
+};
 
 struct sockaddr_in saddr;
+
+QueueHandle_t UDP_Queue_Handle=0;
+
+TimerHandle_t xTimers;
 
 esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -111,18 +118,55 @@ char* read_line(uart_port_t uart_controller) {
 		}
 	}
 }
-
+/*
 void Swap (struct Payload * Swap1, struct Payload * Swap2) {
     struct Payload pSwap = *Swap1;
     *Swap1 = *Swap2;
     *Swap2 = pSwap;
     return;
 }
+*/
+
+void vTimerCallback( TimerHandle_t xTimer )
+ {
+ const uint32_t ulMaxExpiryCountBeforeStopping = 3;
+ uint32_t ulCount;
+
+    /* The number of times this timer has expired is saved as the
+    timer's ID.  Obtain the count. */
+    ulCount = ( uint32_t ) pvTimerGetTimerID( xTimer );
+
+    /* Increment the count, then test to see if the timer has expired
+    ulMaxExpiryCountBeforeStopping yet. */
+    ulCount++;
+
+    ESP_LOGI(TAG, "Cuentas de 10 segundos %d", ulCount);
+
+    /* If the timer has expired 10 times then stop it from running. */
+    if( ulCount >= ulMaxExpiryCountBeforeStopping )
+    {
+        /* Do not use a block time if calling a timer API function
+        from a timer callback function, as doing so could cause a
+        deadlock! */
+        xTimerStop( xTimers, 0 );
+        esp_deep_sleep(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+    }
+    else
+    {
+       /* Store the incremented count back into the timer's ID field
+       so it can be read back again the next time this software timer
+       expires. */
+       vTimerSetTimerID( xTimer, ( void * ) ulCount );
+    }
+
+ }
 
 void loop_task(void *pvParameter)
 {
 	int sock;
-
+	//struct Payload Paquete2;
+	//struct Payload *pMandar = &Paquete2;
+	struct Payload *pMandar;
 	// wait for connection
 	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
 	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
@@ -140,22 +184,27 @@ void loop_task(void *pvParameter)
     }
 
     while(1) {
-    	int r;
-    	Swap(pLeer, pMandar);
-    	r=sendto(sock, (unsigned char *) pMandar, sizeof(struct Payload), 0, (struct sockaddr *) &saddr , sizeof(struct sockaddr_in));
-        if(r!=sizeof(struct Payload)){
-        	ESP_LOGE(UDPTAG, "Failed to send UDP");
-        }
 
-		printf("Send UDP to:\n");
-		printf("pMandar:\n	latitude:  %d\n	longitude  %d\n", pMandar->latitude, pMandar->longitude);
-        vTaskDelay(5000 / portTICK_RATE_MS);
+		if (xQueueReceive(UDP_Queue_Handle, &(pMandar), portMAX_DELAY)) {
+			int r;
+			//Swap(pLeer, pMandar);
+			r=sendto(sock, (unsigned char *) pMandar, sizeof(struct Payload), 0, (struct sockaddr *) &saddr , sizeof(struct sockaddr_in));
+			if(r!=sizeof(struct Payload)){
+				ESP_LOGE(UDPTAG, "Failed to send UDP");
+			}
+
+			printf("Send UDP to:\n");
+			printf("pMandar:\n	latitude:  %d\n	longitude  %d\n", pMandar->latitude, pMandar->longitude);
+			//vTaskDelay(5000 / portTICK_RATE_MS);
+		}
+
     }
 }
 
 void gps_task(void *pvParameter){
-	printf("GPS Demo\r\n\r\n");
 
+	printf("GPS Demo\r\n\r\n");
+	bool lastNaN=pdFALSE;
 		// configure the UART1 controller, connected to the GPS receiver
 		uart_config_t uart_config = {
 	        .baud_rate = 9600,
@@ -175,10 +224,14 @@ void gps_task(void *pvParameter){
 		int fix_quality = -1;
 	    int satellites_tracked = -1;
 
+	    struct Payload Paquete1;
+	    struct Payload *pLeer = &Paquete1;
 
 		// parse any incoming messages and print it
 		while(1) {
 			// read a line from the receiver
+		    pLeer->latitude=0;
+			pLeer->longitude=0;
 			char *line = read_line(UART_NUM_1);
 			//pLeer->latitude=13;
 			//pLeer->longitude=19;
@@ -204,6 +257,26 @@ void gps_task(void *pvParameter){
 							longitude = minmea_tocoord(&frame.longitude);
 							pLeer->longitude=longitude;
 							printf("New longitude: %f\n", longitude);
+
+							if(lastNaN==pdTRUE){
+								ESP_LOGI(TAG, "Last longitude is not a number");
+								if (!isnan(longitude)) {
+									lastNaN=pdFALSE;
+									if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, portMAX_DELAY)) {
+										ESP_LOGE(TAG, "Failed to Send pLeer");
+									}
+								}
+							}
+
+							if (!isnan(longitude)) {
+								if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, portMAX_DELAY)) {
+									ESP_LOGE(TAG, "Failed to Send pLeer");
+								}
+							}
+							else{
+								lastNaN=pdTRUE;
+							}
+
 						}
 					}
 	            } break;
@@ -252,8 +325,7 @@ void app_main()
     }
     ESP_ERROR_CHECK( ret );
 
-	pLeer = &Paquete1;
-	pMandar = &Paquete2;
+
 
     wifi_event_group = xEventGroupCreate();
 
@@ -273,6 +345,14 @@ void app_main()
 	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));;
 	ESP_ERROR_CHECK(esp_wifi_start());
 	printf("Connecting to %s\n", SSID);
+
+	UDP_Queue_Handle =xQueueCreate(3,sizeof(struct Payload));
+
+    xTimers = xTimerCreate( "Timer", pdMS_TO_TICKS( 10000 ), pdTRUE, ( void * ) 0, vTimerCallback );
+    if( xTimerStart( xTimers, 0 ) != pdPASS )
+      {
+		ESP_LOGE(TAG, "Failed to Send pLeer");
+      }
 
     xTaskCreate(&loop_task, "loop_task", 2048, NULL, 5, NULL); //UDP
 
