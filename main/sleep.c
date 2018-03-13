@@ -20,16 +20,19 @@
 #include "driver/gpio.h"
 
 #include "sleep.h"
+#include "wifi.h"
+#include "gps.h"
 
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP 30 /* Time ESP32 will go to sleep (in seconds) */
 
 #define ENABLE_GPS 2
-
+#define CONNECTED_BIT (1<<0)
 TimerHandle_t xTimers;
 
 static const char *TAG = "Deep_sleep";
 
+extern int conexion;
 
 void vTimerCallback( TimerHandle_t xTimer )
  {
@@ -47,7 +50,11 @@ void vTimerCallback( TimerHandle_t xTimer )
     ESP_LOGI(TAG, "Cuentas de 10 segundos %d", ulCount);
     ESP_LOGI(TAG, "GPIO to Vcc");
 
+    if( ulCount == ulMaxExpiryCountBeforeStopping-1 ){
+    	connect_wifi();
+    	conexion=1;
 
+    }
     /* If the timer has expired 10 times then stop it from running. */
     if( ulCount >= ulMaxExpiryCountBeforeStopping )
     {

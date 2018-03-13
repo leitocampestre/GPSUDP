@@ -17,9 +17,10 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "wifi.h"
 #include "mqtt.h"
 #include "ubx.h"
-#include "wifi.h"
+
 
 #define SSID "ofi204"
 #define PASSWORD "peql1234"
@@ -28,7 +29,7 @@
 
 
 #define CONNECTED_BIT (1<<0)
-
+#define WIFI_BIT (1<<1)
 // MQTT client configuration
 
 
@@ -61,7 +62,8 @@ esp_err_t event_handler(void *ctx, system_event_t *event)
 
 
 
-void connect_wifi(void){
+void wifi_init2(void){
+
     wifi_event_group = xEventGroupCreate();
 
 	tcpip_adapter_init();
@@ -78,8 +80,19 @@ void connect_wifi(void){
         },
     };
 	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));;
+	/*
 	ESP_ERROR_CHECK(esp_wifi_start());
 	printf("Connecting to %s\n", SSID);
+
+	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
+	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	ESP_LOGI(TAG, "connected!\n");
+	*/
+}
+
+void connect_wifi(void){
+	ESP_ERROR_CHECK(esp_wifi_start());
+	//printf("Connecting to %s\n", SSID);
 
 	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
 	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);

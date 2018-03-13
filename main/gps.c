@@ -22,11 +22,14 @@
 #include "ubx.h"
 #include "mqtt.h"
 #include "gps.h"
+#include "wifi.h"
 
 static char * gps_rx_buffer;
 static struct GPS_RX_STATS gpsRxStats;
 QueueHandle_t UDP_Queue_Handle=0;
 static const char *TAG = "Gps";
+
+extern int conexion;
 
 mqtt_settings settings = {
     	.host = "10.73.32.152",
@@ -35,7 +38,7 @@ mqtt_settings settings = {
     	.clean_session = 0,
     	.keepalive = 120,
     	.connected_cb = mqtt_connected_callback
-    };//puede que no ande
+    };
 
 void mqtt_connected_callback(mqtt_client *client, mqtt_event_data_t *event_data)
 {
@@ -58,16 +61,16 @@ void mqtt_connected_callback(mqtt_client *client, mqtt_event_data_t *event_data)
 
 void mqtt_init(void){
 
-
 	printf("Connecting to the MQTT server... ");
 	mqtt_start(&settings);
+
 }
 
 void gps_task(void *pvParameter){
 
-	printf("GPS Demo\r\n\r\n");
+		printf("GPS Demo\r\n\r\n");
 
-	portTickType xDelay = 100 / portTICK_RATE_MS;
+		portTickType xDelay = 100 / portTICK_RATE_MS;
 		// configure the UART1 controller, connected to the GPS receiver
 		uart_config_t uart_config = {
 	        .baud_rate = 9600,
@@ -86,7 +89,7 @@ void gps_task(void *pvParameter){
 	    GPSPositionData *pLeer;
 	    //struct Payload Paquete1;
 	    //struct Payload *pLeer = &Paquete1;
-	    UDP_Queue_Handle = xQueueCreate(3,sizeof(GPSPositionData));//revisar
+	    UDP_Queue_Handle = xQueueCreate(5,sizeof(GPSPositionData));//revisar
 
 	    pLeer= (GPSPositionData *) pvPortMalloc(sizeof(GPSPositionData));
 	    //pLeer = &Paquete1;
@@ -101,6 +104,12 @@ void gps_task(void *pvParameter){
 	    while (1)
 	    	{
 	    		uint8_t c;
+
+	    		if (conexion==1){
+	    			//connect_wifi();
+	    			mqtt_init();
+	    			conexion=0;
+	    		}
 	    		// This blocks the task until there is something on the buffer
 	    		while (uart_read_bytes(UART_NUM_1, &c, 1, xDelay) > 0)
 	    		{
@@ -126,7 +135,6 @@ void gps_task(void *pvParameter){
 	    					ESP_LOGI(TAG, "GPS is not Fix");
 	    				}
 	    			}
-
 
 	    		}
 	    }

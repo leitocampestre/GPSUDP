@@ -31,8 +31,11 @@ struct Payload{
 //struct sockaddr_in saddr;
 
 static const char *TAG = "init";
+
+int conexion;
 void app_main()
 {
+
 	esp_log_level_set(TAG, ESP_LOG_INFO);
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -41,11 +44,9 @@ void app_main()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK( ret );
-    //connect wifi
-    connect_wifi();
-	// start the MQTT client
 
-    mqtt_init();
+    conexion =0;
+    wifi_init2();
 
     timerinit();
 

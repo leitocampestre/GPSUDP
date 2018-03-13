@@ -8,6 +8,8 @@
 #ifndef MAIN_GPS_H_
 #define MAIN_GPS_H_
 
+#include "mqtt.h"
+
 void mqtt_connected_callback(mqtt_client *client, mqtt_event_data_t *event_data);
 void mqtt_init(void);
 void gps_task(void *pvParameter);
