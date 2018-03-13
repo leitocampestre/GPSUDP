@@ -16,13 +16,14 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 
-#include "minmea.h"
+#include "ubx.h"
 
 #define SSID "ofi204"
 #define PASSWORD "peql1234"
@@ -34,21 +35,30 @@
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP 10 /* Time ESP32 will go to sleep (in seconds) */
 
+#define ENABLE_GPS 2
+
 static const char *TAG = "wifi";
 static const char *UDPTAG = "udp";
 
 static EventGroupHandle_t wifi_event_group;
 
+/*
 struct Payload{
-	int latitude;
-	int longitude;
+	uint32_t latitude;
+	uint32_t longitude;
 };
+*/
 
 struct sockaddr_in saddr;
 
 QueueHandle_t UDP_Queue_Handle=0;
 
 TimerHandle_t xTimers;
+
+static char * gps_rx_buffer;
+
+static struct GPS_RX_STATS gpsRxStats;
+
 
 esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -95,37 +105,7 @@ static int create_socket()
 
 }
 
-// read a line from the UART controller
-char* read_line(uart_port_t uart_controller) {
 
-	static char line[MINMEA_MAX_LENGTH];
-	char *ptr = line;
-
-	while(1) {
-
-		int num_read = uart_read_bytes(uart_controller, (unsigned char *)ptr, 1, portMAX_DELAY);
-		if(num_read == 1) {
-
-			// new line found, terminate the string and return
-			if(*ptr == '\n') {
-				ptr++;
-				*ptr = '\0';
-				return line;
-			}
-
-			// else move to the next char
-			ptr++;
-		}
-	}
-}
-/*
-void Swap (struct Payload * Swap1, struct Payload * Swap2) {
-    struct Payload pSwap = *Swap1;
-    *Swap1 = *Swap2;
-    *Swap2 = pSwap;
-    return;
-}
-*/
 
 void vTimerCallback( TimerHandle_t xTimer )
  {
@@ -141,6 +121,9 @@ void vTimerCallback( TimerHandle_t xTimer )
     ulCount++;
 
     ESP_LOGI(TAG, "Cuentas de 10 segundos %d", ulCount);
+    ESP_LOGI(TAG, "GPIO to Vcc");
+
+
 
     /* If the timer has expired 10 times then stop it from running. */
     if( ulCount >= ulMaxExpiryCountBeforeStopping )
@@ -149,6 +132,8 @@ void vTimerCallback( TimerHandle_t xTimer )
         from a timer callback function, as doing so could cause a
         deadlock! */
         xTimerStop( xTimers, 0 );
+        gpio_set_level(ENABLE_GPS, 0);
+        ESP_LOGI(TAG, "GPIO to Ground");
         esp_deep_sleep(TIME_TO_SLEEP * uS_TO_S_FACTOR);
     }
     else
@@ -166,7 +151,7 @@ void loop_task(void *pvParameter)
 	int sock;
 	//struct Payload Paquete2;
 	//struct Payload *pMandar = &Paquete2;
-	struct Payload *pMandar;
+	GPSPositionData *pMandar;
 	// wait for connection
 	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
 	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
@@ -188,13 +173,13 @@ void loop_task(void *pvParameter)
 		if (xQueueReceive(UDP_Queue_Handle, &(pMandar), portMAX_DELAY)) {
 			int r;
 			//Swap(pLeer, pMandar);
-			r=sendto(sock, (unsigned char *) pMandar, sizeof(struct Payload), 0, (struct sockaddr *) &saddr , sizeof(struct sockaddr_in));
-			if(r!=sizeof(struct Payload)){
+			r=sendto(sock, (unsigned char *) pMandar, sizeof(GPSPositionData), 0, (struct sockaddr *) &saddr , sizeof(struct sockaddr_in));
+			if(r!=sizeof(GPSPositionData)){
 				ESP_LOGE(UDPTAG, "Failed to send UDP");
 			}
 
 			printf("Send UDP to:\n");
-			printf("pMandar:\n	latitude:  %d\n	longitude  %d\n", pMandar->latitude, pMandar->longitude);
+			printf("pMandar:\n	latitude:  %d\n	longitude  %d\n", pMandar->Latitude, pMandar->Longitude);
 			//vTaskDelay(5000 / portTICK_RATE_MS);
 		}
 
@@ -204,7 +189,7 @@ void loop_task(void *pvParameter)
 void gps_task(void *pvParameter){
 
 	printf("GPS Demo\r\n\r\n");
-	bool lastNaN=pdFALSE;
+	portTickType xDelay = 100 / portTICK_RATE_MS;
 		// configure the UART1 controller, connected to the GPS receiver
 		uart_config_t uart_config = {
 	        .baud_rate = 9600,
@@ -218,102 +203,42 @@ void gps_task(void *pvParameter){
 	    uart_set_pin(UART_NUM_1, 4, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE); //4 16
 	    uart_driver_install(UART_NUM_1, 1024, 0, 0, NULL, 0);
 
-		// GPS variables and initial state
-		float latitude = -1.0;
-		float longitude = -1.0;
-		int fix_quality = -1;
-	    int satellites_tracked = -1;
+	    GPSPositionData gpsposition;
 
-	    struct Payload Paquete1;
-	    struct Payload *pLeer = &Paquete1;
+	    GPSPositionData *pLeer;
+	    //struct Payload Paquete1;
+	    //struct Payload *pLeer = &Paquete1;
+	    pLeer= (GPSPositionData *) pvPortMalloc(sizeof(GPSPositionData));
+	    //pLeer = &Paquete1;
 
 		// parse any incoming messages and print it
-		while(1) {
-			// read a line from the receiver
-		    pLeer->latitude=0;
-			pLeer->longitude=0;
-			char *line = read_line(UART_NUM_1);
-			//pLeer->latitude=13;
-			//pLeer->longitude=19;
-			// parse the line
-			switch (minmea_sentence_id(line, false)) {
+	    while (1)
+	    	{
+	    		uint8_t c;
 
-	            case MINMEA_SENTENCE_RMC: {
+	    		// This blocks the task until there is something on the buffer
+	    		while (uart_read_bytes(UART_NUM_1, &c, 1, xDelay) > 0)
+	    		{
+	    			int res;
+	    			res = parse_ubx_stream (c, gps_rx_buffer, &gpsposition, &gpsRxStats);
+	    			if (res == PARSER_COMPLETE) {
+	    				pLeer ->Latitude=gpsposition.Latitude;
+	    				pLeer ->Longitude=gpsposition.Longitude;
+	    				printf("Parce complete:\n");
+	    				printf("pLeer:\n	latitude:  %d\n	longitude  %d, Status:%d \n", pLeer->Latitude, pLeer->Longitude, gpsposition.Status);
+	    				if (gpsposition.Status!=GPSPOSITION_STATUS_NOFIX){
+	    					if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, (TickType_t) 0)) {
+	    						ESP_LOGE(TAG, "Failed to Send pLeer");
+	    					}
+	    				else
+	    					ESP_LOGI(TAG, "GPS is not Fix");
+	    				}
+	    			}
 
-					struct minmea_sentence_rmc frame;
-	                if (minmea_parse_rmc(&frame, line)) {
 
-						// latitude valid and changed? apply a threshold
-						float new_latitude = minmea_tocoord(&frame.latitude);
-						if((new_latitude != NAN) && (abs(new_latitude - latitude) > 0.001)) {
-							latitude = new_latitude;
-							pLeer->latitude=new_latitude;
-							printf("New latitude: %f\n", latitude);
-						}
-
-						// longitude valid and changed? apply a threshold
-						float new_longitude = minmea_tocoord(&frame.longitude);
-						if((new_longitude != NAN) && (abs(new_longitude - longitude) > 0.001)) {
-							longitude = minmea_tocoord(&frame.longitude);
-							pLeer->longitude=longitude;
-							printf("New longitude: %f\n", longitude);
-
-							if(lastNaN==pdTRUE){
-								ESP_LOGI(TAG, "Last longitude is not a number");
-								if (!isnan(longitude)) {
-									lastNaN=pdFALSE;
-									if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, portMAX_DELAY)) {
-										ESP_LOGE(TAG, "Failed to Send pLeer");
-									}
-								}
-							}
-
-							if (!isnan(longitude)) {
-								if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, portMAX_DELAY)) {
-									ESP_LOGE(TAG, "Failed to Send pLeer");
-								}
-							}
-							else{
-								lastNaN=pdTRUE;
-							}
-
-						}
-					}
-	            } break;
-
-	            case MINMEA_SENTENCE_GGA: {
-
-					struct minmea_sentence_gga frame;
-	                if (minmea_parse_gga(&frame, line)) {
-
-						// fix quality changed?
-						if(frame.fix_quality != fix_quality) {
-							fix_quality = frame.fix_quality;
-							printf("New fix quality: %d\n", fix_quality);
-						}
-	                }
-	            } break;
-
-	            case MINMEA_SENTENCE_GSV: {
-
-					struct minmea_sentence_gsv frame;
-	                if (minmea_parse_gsv(&frame, line)) {
-
-						// number of satellites changed?
-						if(frame.total_sats != satellites_tracked) {
-							satellites_tracked = frame.total_sats;
-							printf("New satellites tracked: %d\n", satellites_tracked);
-						}
-					}
-	            } break;
-
-				default: break;
-	        }
-			printf("pLeer:\n	latitude:  %d\n	longitude  %d\n", pLeer->latitude, pLeer->longitude);
-			vTaskDelay(2000 / portTICK_RATE_MS);
+	    		}
 	    }
 }
-
 void app_main()
 {
 	esp_log_level_set(TAG, ESP_LOG_INFO);
@@ -346,7 +271,14 @@ void app_main()
 	ESP_ERROR_CHECK(esp_wifi_start());
 	printf("Connecting to %s\n", SSID);
 
-	UDP_Queue_Handle =xQueueCreate(3,sizeof(struct Payload));
+
+	gpio_pad_select_gpio(ENABLE_GPS);
+	gpio_set_direction(ENABLE_GPS, GPIO_MODE_OUTPUT);
+	gpio_set_level(ENABLE_GPS, 1);
+
+	gps_rx_buffer = pvPortMalloc(sizeof(struct UBXPacket));
+
+	UDP_Queue_Handle =xQueueCreate(3,sizeof(GPSPositionData));
 
     xTimers = xTimerCreate( "Timer", pdMS_TO_TICKS( 10000 ), pdTRUE, ( void * ) 0, vTimerCallback );
     if( xTimerStart( xTimers, 0 ) != pdPASS )

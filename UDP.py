@@ -2,7 +2,7 @@ import socket
 from array import array
 import collections
 
-Paquete = collections.namedtuple('Paquete', 'latitude longitude')
+Paquete = collections.namedtuple('Paquete', 'Status Latitude Longitude Altitude GeoidSeparation Heading Groundspeed Satellites PDOP HDOP VDOP')
 
 UDP_IP = "10.73.32.164"
 UDP_PORT = 2207
@@ -22,4 +22,14 @@ with open('workfile.txt','w') as F:
 		print "received message:", mypaquete
 
 
-
+    uint8_t Status;
+    int32_t Latitude;
+    int32_t Longitude;
+    float Altitude;
+    float GeoidSeparation;
+    float Heading;
+    float Groundspeed;
+    int8_t Satellites;
+    float PDOP;
+    float HDOP;
+    float VDOP;
