@@ -18,10 +18,15 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 
+/*
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
+*/
+
+// espmqtt library
+#include "mqtt.h"
 
 #include "ubx.h"
 
@@ -33,12 +38,11 @@
 #define CONNECTED_BIT (1<<0)
 
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP 10 /* Time ESP32 will go to sleep (in seconds) */
+#define TIME_TO_SLEEP 30 /* Time ESP32 will go to sleep (in seconds) */
 
 #define ENABLE_GPS 2
 
 static const char *TAG = "wifi";
-static const char *UDPTAG = "udp";
 
 static EventGroupHandle_t wifi_event_group;
 
@@ -49,7 +53,7 @@ struct Payload{
 };
 */
 
-struct sockaddr_in saddr;
+//struct sockaddr_in saddr;
 
 QueueHandle_t UDP_Queue_Handle=0;
 
@@ -58,6 +62,7 @@ TimerHandle_t xTimers;
 static char * gps_rx_buffer;
 
 static struct GPS_RX_STATS gpsRxStats;
+
 
 
 esp_err_t event_handler(void *ctx, system_event_t *event)
@@ -82,7 +87,7 @@ esp_err_t event_handler(void *ctx, system_event_t *event)
 	}
     return ESP_OK;
 }
-
+/*
 static int create_socket()
 {
     int sock = -1;
@@ -104,7 +109,7 @@ static int create_socket()
     return sock;
 
 }
-
+*/
 
 
 void vTimerCallback( TimerHandle_t xTimer )
@@ -122,7 +127,6 @@ void vTimerCallback( TimerHandle_t xTimer )
 
     ESP_LOGI(TAG, "Cuentas de 10 segundos %d", ulCount);
     ESP_LOGI(TAG, "GPIO to Vcc");
-
 
 
     /* If the timer has expired 10 times then stop it from running. */
@@ -146,45 +150,35 @@ void vTimerCallback( TimerHandle_t xTimer )
 
  }
 
-void loop_task(void *pvParameter)
+void mqtt_connected_callback(mqtt_client *client, mqtt_event_data_t *event_data)
 {
-	int sock;
-	//struct Payload Paquete2;
-	//struct Payload *pMandar = &Paquete2;
+
 	GPSPositionData *pMandar;
-	// wait for connection
-	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
-	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
-	ESP_LOGI(TAG, "connected!\n");
-
-	tcpip_adapter_ip_info_t ip_info;
-	ESP_ERROR_CHECK(tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info));
-	printf("IP Address:  %s\n", ip4addr_ntoa(&ip_info.ip));
-	printf("Subnet mask: %s\n", ip4addr_ntoa(&ip_info.netmask));
-	printf("Gateway:     %s\n", ip4addr_ntoa(&ip_info.gw));
-
-    sock = create_socket();
-    if (sock < 0) {
-        ESP_LOGE(TAG, "Failed to create socket");
-    }
 
     while(1) {
 
 		if (xQueueReceive(UDP_Queue_Handle, &(pMandar), portMAX_DELAY)) {
-			int r;
-			//Swap(pLeer, pMandar);
-			r=sendto(sock, (unsigned char *) pMandar, sizeof(GPSPositionData), 0, (struct sockaddr *) &saddr , sizeof(struct sockaddr_in));
-			if(r!=sizeof(GPSPositionData)){
-				ESP_LOGE(UDPTAG, "Failed to send UDP");
-			}
-
-			printf("Send UDP to:\n");
-			printf("pMandar:\n	latitude:  %d\n	longitude  %d\n", pMandar->Latitude, pMandar->Longitude);
-			//vTaskDelay(5000 / portTICK_RATE_MS);
+			char pos_string[60];
+			//char lon_string[30];
+			sprintf(pos_string, "{ \"latitude\": %.7f, \"longitude\": %.7f }", pMandar->Latitude, pMandar->Longitude);
+			//sprintf(lon_string, "%.7f", pMandar->Longitude);
+			mqtt_publish(client, "/esp/1/pos", pos_string, strlen(pos_string), 0, 0);
+//			mqtt_publish(client, "/esp/longitude", lon_string, strlen(lon_string), 0, 0);
+			printf("Latitud Publicada: %.7f Longitude enviada: %.7f\n", pMandar->Latitude, pMandar->Longitude);
 		}
-
     }
 }
+
+
+    // MQTT client configuration
+    mqtt_settings settings = {
+    	.host = "10.73.32.152",
+    	.port = 1883,
+    	.client_id = "esp01",
+    	.clean_session = 0,
+    	.keepalive = 120,
+    	.connected_cb = mqtt_connected_callback
+    };
 
 void gps_task(void *pvParameter){
 
@@ -210,22 +204,31 @@ void gps_task(void *pvParameter){
 	    //struct Payload *pLeer = &Paquete1;
 	    pLeer= (GPSPositionData *) pvPortMalloc(sizeof(GPSPositionData));
 	    //pLeer = &Paquete1;
-
+	    pLeer = & gpsposition;
 		// parse any incoming messages and print it
+		float previuslat=0.0;
+		float previuslon=0.0;
+		float distancia=0.0;
 	    while (1)
 	    	{
 	    		uint8_t c;
-
 	    		// This blocks the task until there is something on the buffer
 	    		while (uart_read_bytes(UART_NUM_1, &c, 1, xDelay) > 0)
 	    		{
 	    			int res;
+
 	    			res = parse_ubx_stream (c, gps_rx_buffer, &gpsposition, &gpsRxStats);
 	    			if (res == PARSER_COMPLETE) {
-	    				pLeer ->Latitude=gpsposition.Latitude;
-	    				pLeer ->Longitude=gpsposition.Longitude;
+	    				//pLeer ->Latitude=gpsposition.Latitude;
+	    				//pLeer ->Longitude=gpsposition.Longitude;
 	    				printf("Parce complete:\n");
-	    				printf("pLeer:\n	latitude:  %d\n	longitude  %d, Status:%d \n", pLeer->Latitude, pLeer->Longitude, gpsposition.Status);
+	    				printf("pLeer:\n	latitude:  %.7f\n	longitude  %.7f, Status:%d \n", pLeer->Latitude, pLeer->Longitude, gpsposition.Status);
+	    				printf("pLeer:\n	Position DOP:  %.2f\n	Horizontal DOP  %.2f, Vertical DOP:%.2f \n", pLeer->PDOP, pLeer->HDOP, pLeer->VDOP);
+	    				if(previuslat!=0.0)
+	    					distancia=distance(previuslat, previuslon, pLeer->Latitude, pLeer->Longitude);
+	    				previuslat=pLeer->Latitude;
+	    				previuslon=pLeer->Longitude;
+	    				printf("Distancia: %.2f\n", distancia);
 	    				if (gpsposition.Status!=GPSPOSITION_STATUS_NOFIX){
 	    					if (!xQueueSend(UDP_Queue_Handle, ( void * ) &pLeer, (TickType_t) 0)) {
 	    						ESP_LOGE(TAG, "Failed to Send pLeer");
@@ -271,6 +274,13 @@ void app_main()
 	ESP_ERROR_CHECK(esp_wifi_start());
 	printf("Connecting to %s\n", SSID);
 
+	ESP_LOGI(TAG, "Loop task: waiting for connection to the wifi network... ");
+	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	ESP_LOGI(TAG, "connected!\n");
+
+	// start the MQTT client
+	printf("Connecting to the MQTT server... ");
+	mqtt_start(&settings);
 
 	gpio_pad_select_gpio(ENABLE_GPS);
 	gpio_set_direction(ENABLE_GPS, GPIO_MODE_OUTPUT);
@@ -286,7 +296,9 @@ void app_main()
 		ESP_LOGE(TAG, "Failed to Send pLeer");
       }
 
-    xTaskCreate(&loop_task, "loop_task", 2048, NULL, 5, NULL); //UDP
-
     xTaskCreate(&gps_task, "gps_task", 2048, NULL, 5, NULL);  //GPS
+
 }
+
+
+

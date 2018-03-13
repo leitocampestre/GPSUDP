@@ -42,6 +42,7 @@
 #define UBX_H
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 
 #define	NO_PARSER	-3 // no parser available
@@ -86,6 +87,9 @@
 #define GPSSATELLITES_SNR_NUMELEM 16
 
 #define GPSPOSITION_OBJID 3041480770U
+
+#define CONSTANTS_RADIUS_OF_EARTH	6371000
+#define M_PI_F 3.14159265358979323846f
 
 typedef enum { GPSPOSITION_STATUS_NOGPS=0, GPSPOSITION_STATUS_NOFIX=1, GPSPOSITION_STATUS_FIX2D=2, GPSPOSITION_STATUS_FIX3D=3 } GPSPositionStatusOptions;
 // private structures
@@ -257,8 +261,8 @@ struct UBXPacket {
 // Object data
 typedef struct {
     uint8_t Status;
-    int32_t Latitude;
-    int32_t Longitude;
+    float Latitude;
+    float Longitude;
     float Altitude;
     float GeoidSeparation;
     float Heading;
@@ -310,6 +314,8 @@ bool checksum_ubx_message(struct UBXPacket *);
 uint32_t parse_ubx_message(struct UBXPacket *, GPSPositionData *);
 int  parse_ubx_stream(uint8_t, char *, GPSPositionData *, struct GPS_RX_STATS *);
 
+
+float distance(float lat_now, float lon_now, float lat_next, float lon_next);
 #endif /* UBX_H */
 
 

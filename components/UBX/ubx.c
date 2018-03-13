@@ -194,8 +194,8 @@ void parse_ubx_nav_posllh (struct UBX_NAV_POSLLH *posllh, GPSPositionData *GpsPo
 		if (GpsPosition->Status != GPSPOSITION_STATUS_NOFIX) {
 			GpsPosition->Altitude = (float)posllh->hMSL*0.001f;
 			GpsPosition->GeoidSeparation = (float)(posllh->height - posllh->hMSL)*0.001f;
-			GpsPosition->Latitude = posllh->lat;
-			GpsPosition->Longitude = posllh->lon;
+			GpsPosition->Latitude = (float)posllh->lat * 1.0e-7f;;
+			GpsPosition->Longitude = (float)posllh->lon* 1.0e-7f;;
 		}
 	}
 }
@@ -334,3 +334,23 @@ uint32_t parse_ubx_message (struct UBXPacket *ubx, GPSPositionData *GpsPosition)
 	return id;
 }
 
+double radians(double degrees)
+{
+	return (degrees / (double)180.0) * M_PI_F;
+}
+
+float distance(float lat_now, float lon_now, float lat_next, float lon_next){
+	double lat_now_rad = radians((double)lat_now);
+	double lon_now_rad = radians((double)lon_now);
+	double lat_next_rad = radians((double)lat_next);
+	double lon_next_rad = radians((double)lon_next);
+
+	double d_lat = lat_next_rad - lat_now_rad;
+	double d_lon = lon_next_rad - lon_now_rad;
+
+	double a = sin(d_lat / (double)2.0) * sin(d_lat / (double)2.0) + sin(d_lon / (double)2.0) * sin(d_lon /
+				(double)2.0) * cos(lat_now_rad) * cos(lat_next_rad);
+	double c = (double)2.0 * atan2(sqrt(a), sqrt((double)1.0 - a));
+
+	return CONSTANTS_RADIUS_OF_EARTH* (float)c;
+}
